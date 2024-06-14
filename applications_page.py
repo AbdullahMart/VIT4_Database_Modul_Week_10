@@ -6,34 +6,28 @@ import sys
 import os
 import pickle
 from collections import Counter, defaultdict
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
+import psycopg2
+import pandas
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/calendar.readonly']
+database_name = "CRM"
+user = "postgres"
+password = "2713"
+host = "localhost"  # Genellikle localhost 
 
-# Kimlik doğrulama işlemi
-def authenticate():
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-    return creds
+# PostgreSQL veritabanına bağlanma
+try:
+    connection = psycopg2.connect(
+        dbname=database_name,
+        user=user,
+        password=password,
+        host=host
+    )
+    cursor = connection.cursor()
+    print("Bağlantı başarılı!")
+except Exception as e:
+    print(f"Bağlantı hatası: {e}")
 
-# Google Sheets'ten verileri çeken fonksiyon
-def list_column_values(service, spreadsheet_id, range_name):
-    sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-    values = result.get('values', [])
-    return values
+
 
 class ApplicationWindow(QMainWindow):
     def __init__(self):
@@ -226,71 +220,126 @@ class ApplicationWindow(QMainWindow):
             print(f"Error finding combined language levels: {e}")
 
     def load_all_applications(self):
+        
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            print("Data retrieved from Google Sheets:", data)  # Hata ayıklama için veriyi yazdırın
-            self.load_data(data)
+            # kursiyerler ve basvurular tablolarını JOIN ile birleştiren sorgu
+            join_query = """
+            SELECT k.AdSoyad,k.MailAdresi, k.TelefonNumarasi, k.PostaKodu,ZamanDamgasi,
+            b.SuAnkiDurum,
+            b.ITPHEgitimKatilmak,
+            b.EkonomikDurum,
+            b.DilKursunaDevam ,
+            b.IngilizceSeviye,
+            b.HollandacaSeviye,
+            b.BaskiGoruyor,
+            b.BootcampBitirdi,
+            b.OnlineITKursu,
+            b.ITTecrube,
+            b.ProjeDahil,
+            b.CalismaIstegi,
+            b.NedenKatilmakIstiyor ,
+            b.BasvuruDonemi ,
+            b.MentorGorusmesi
+            FROM kursiyerler k
+            INNER JOIN basvurular b ON k.KursiyerID = b.KursiyerID
+          
+            """
+            cursor.execute(join_query)
+            
+            # Sonuçları alın
+            duplicate_results = cursor.fetchall()
+            
+            # Sütun başlıklarını ekleyin
+            headers = ['AdSoyad', 'MailAdresi','TelefonNumarasi','PostaKodu','SuAnkiDurum','ITPHEgitimKatilmak','EkonomikDurum',
+            'DilKursunaDevam' ,
+            'IngilizceSeviye',
+            'HollandacaSeviye',
+            'BaskiGoruyor',
+            'BootcampBitirdi',
+            'OnlineITKursu',
+            'ITTecrube',
+            'ProjeDahil',
+            'CalismaIstegi',
+            'NedenKatilmakIstiyor' ,
+            'BasvuruDonemi' ,
+            'MentorGorusmesi' ]
+            duplicate_results.insert(0, headers)
+
+            # Verileri yükleyin
+            self.load_data(duplicate_results)
         except Exception as e:
-            print(f"Error loading data: {e}")
+            print(f"Error finding all applications: {e}")
+
 
     def find_multiple_registrations(self):
+    
+        
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            name_column = [row[1].strip().lower() for row in data[1:]]  # B sütunu (isimler) büyük/küçük harf duyarsız
-            name_counts = Counter(name_column)
+            # kursiyerler ve basvurular tablolarını JOIN ile birleştiren sorgu
+            join_query = """
+            SELECT k.AdSoyad, k.MailAdresi, COUNT(*) as BasvuruSayisi
+            FROM kursiyerler k
+            INNER JOIN basvurular b ON k.KursiyerID = b.KursiyerID
+            GROUP BY k.AdSoyad, k.MailAdresi
+            HAVING COUNT(*) > 1
+            """
+            cursor.execute(join_query)
+            
+            # Sonuçları alın
+            duplicate_results = cursor.fetchall()
+            
+            # Sütun başlıklarını ekleyin
+            headers = ["AdSoyad", "MailAdresi", "Başvuru Sayısı"]
+            duplicate_results.insert(0, headers)
 
-            # Birden fazla kayıt bulunan isimler
-            multiple_names = {name for name, count in name_counts.items() if count > 1}
-
-            # İlgili satırları filtrele
-            filtered_data = [row for row in data if row[1].strip().lower() in multiple_names]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
+            # Verileri yükleyin
+            self.load_data(duplicate_results)
         except Exception as e:
-            print(f"Error finding multiple registrations: {e}")
+            print(f"Error finding multiple applications: {e}")
 
     def find_assigned_mentor_meetings(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
+            # kursiyerler ve basvurular tablolarını JOIN ile birleştiren sorgu
+            join_query = """
+            SELECT k.AdSoyad,k.MailAdresi, k.TelefonNumarasi, k.PostaKodu, b.MentorGorusmesi FROM kursiyerler k
+            INNER JOIN basvurular b ON k.KursiyerID = b.KursiyerID 
+            WHERE b.MentorGorusmesi= 'OK'
+            """
+            cursor.execute(join_query)
             
-            # "Mentor Görüşmesi" sütunu U (21. sütun) olduğu için kontrol edin
-            filtered_data = [row for row in data if len(row) > 20 and row[20].strip().
-                        strip().upper() == "OK"]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
+            # Sonuçları alın
+            combined_results = cursor.fetchall()
             
-            self.load_data(filtered_data)
+            # Sütun başlıklarını ekleyin
+            headers = ["AdSoyad", "MailAdresi", "TelefonNumarasi", "PostaKodu", "MentorGorusmesi", ]
+            combined_results.insert(0, headers)
+
+            # Verileri yükleyin
+            self.load_data(combined_results)
+
         except Exception as e:
             print(f"Error finding assigned mentor meetings: {e}")
 
     def find_unassigned_mentor_meetings(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
+            # kursiyerler ve basvurular tablolarını JOIN ile birleştiren sorgu
+            join_query = """
+            SELECT k.AdSoyad,k.MailAdresi, k.TelefonNumarasi, k.PostaKodu, b.MentorGorusmesi FROM kursiyerler k
+            INNER JOIN basvurular b ON k.KursiyerID = b.KursiyerID 
+            WHERE b.MentorGorusmesi= 'ATANMADI' OR b.MentorGorusmesi IS NULL
+            """
+            cursor.execute(join_query)
             
-            # "Mentor Görüşmesi" sütunu U (21. sütun) olduğu için kontrol edin
-            filtered_data = [row for row in data if len(row) > 20 and row[20].strip().upper() != "OK"]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
+            # Sonuçları alın
+            combined_results = cursor.fetchall()
             
-            self.load_data(filtered_data)
+            # Sütun başlıklarını ekleyin
+            headers = ["AdSoyad", "MailAdresi", "TelefonNumarasi", "PostaKodu", "MentorGorusmesi", ]
+            combined_results.insert(0, headers)
+
+            # Verileri yükleyin
+            self.load_data(combined_results)
+
         except Exception as e:
             print(f"Error finding unassigned mentor meetings: {e}")
 
