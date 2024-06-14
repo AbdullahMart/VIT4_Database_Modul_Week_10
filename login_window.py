@@ -1,64 +1,43 @@
-from googleapiclient.discovery import build
-from google.oauth2.credentials import Credentials
-from google_auth_oauthlib.flow import InstalledAppFlow
-from google.auth.transport.requests import Request
+
 import pickle
 import os
 from PyQt6 import QtWidgets, QtGui, QtCore
 from PyQt6.QtWidgets import QMessageBox
+import psycopg2
 
-# Google Sheets API kapsamları
-SCOPES = ['https://www.googleapis.com/auth/spreadsheets.readonly','https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar']
+database_name = "CRM"
+user = "postgres"
+password = "Kirmizi"
+host = "localhost"  # Genellikle localhost 
 
-def list_column_values(service, spreadsheet_id, range_name):
-    """
-    Belirli bir Google Sheets'deki belirli bir aralıktaki değerleri listeler.
-    """
-    sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-    values = result.get('values', [])
-    if not values:
-        return {}
-    headers = values[0]
-    data = {header: [] for header in headers}
-    for row in values[1:]:
-        for i, header in enumerate(headers):
-            data[header].append(row[i] if i < len(row) else None)
-    return data
+# PostgreSQL veritabanına bağlanma
+try:
+    connection = psycopg2.connect(
+        dbname=database_name,
+        user=user,
+        password=password,
+        host=host
+    )
+    cursor = connection.cursor()
+    print("Bağlantı başarılı!")
+except Exception as e:
+    print(f"Bağlantı hatası: {e}")
 
-def authenticate():
-    """
-    Google Sheets API'ına kimlik doğrulama yapar.
-    """
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-    return creds
 
 def authenticate_user(username, password):
-    """
-    Veritabanındaki kullanıcı adı ve şifreyi doğrular.
-    """
-    credentials = authenticate()
-    if credentials is None:
+    try:
+        query = "SELECT yetki FROM kullanicilar WHERE kullaniciadi=%s AND parola=%s"
+        cursor.execute(query, (username, password))
+        result = cursor.fetchone()
+        if result:
+            return result[0]  # yetki değeri döndürülüyor
+        else:
+            return None
+    except Exception as e:
+        print(f"Doğrulama hatası: {e}")
         return None
-    service = build('sheets', 'v4', credentials=credentials)
-    spreadsheet_id = '1nyTJioGcvDyHV8ZryxdWmU3ziBe1Txs9mC0yuDhrVUg'  # "Kullanicilar" dosyasının kimliği
-    range_name = 'Form Yanıtları 1!A:C'
-    column_values = list_column_values(service, spreadsheet_id, range_name)
-    for i in range(len(column_values['kullanici'])):
-        if column_values['kullanici'][i] == username and column_values['parola'][i] == password:
-            return column_values['yetki'][i]
-    return None
+
+
 
 class Ui_LoginMainWindow(object):
     def setupUi(self, LoginMainWindow):
@@ -261,7 +240,7 @@ class Ui_LoginMainWindow(object):
             self.userWindow.show()
             self.main_window.close()
         else:
-            QMessageBox.warning(self, "Hata", "Kullanıcı adı veya şifre hatalı!")
+            QMessageBox.warning(self.centralwidget, "Hata", "Kullanıcı adı veya şifre hatalı!")
             self.admin_username_lineEdit_3.clear()
             self.admin_password_lineEdit_4.clear()
 

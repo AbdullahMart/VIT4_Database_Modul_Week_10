@@ -4,36 +4,35 @@ from PyQt6.QtGui import QPixmap, QFont
 from PyQt6.QtCore import Qt
 import sys
 import os
-import pickle
+import psycopg2
 from collections import Counter, defaultdict
-from google.auth.transport.requests import Request
-from google_auth_oauthlib.flow import InstalledAppFlow
-from googleapiclient.discovery import build
 
-SCOPES = ['https://www.googleapis.com/auth/gmail.send', 'https://www.googleapis.com/auth/calendar','https://www.googleapis.com/auth/calendar.readonly']
+# Veritabanı bağlantı bilgileri
+database_name = "CRM"
+user = "postgres"
+password = "Kirmizi"
+host = "localhost"
 
-# Kimlik doğrulama işlemi
-def authenticate():
-    creds = None
-    if os.path.exists('token.pickle'):
-        with open('token.pickle', 'rb') as token:
-            creds = pickle.load(token)
-    if not creds or not creds.valid:
-        if creds and creds.expired and creds.refresh_token:
-            creds.refresh(Request())
-        else:
-            flow = InstalledAppFlow.from_client_secrets_file('credentials.json', SCOPES)
-            creds = flow.run_local_server(port=0)
-        with open('token.pickle', 'wb') as token:
-            pickle.dump(creds, token)
-    return creds
+# PostgreSQL bağlantısı
+def connect_to_db():
+    conn = psycopg2.connect(
+        dbname=database_name,
+        user=user,
+        password=password,
+        host=host
+    )
+    return conn
 
-# Google Sheets'ten verileri çeken fonksiyon
-def list_column_values(service, spreadsheet_id, range_name):
-    sheet = service.spreadsheets()
-    result = sheet.values().get(spreadsheetId=spreadsheet_id, range=range_name).execute()
-    values = result.get('values', [])
-    return values
+# Veritabanından verileri çeken fonksiyon
+def fetch_data(query, params=None):
+    conn = connect_to_db()
+    cur = conn.cursor()
+    cur.execute(query, params)
+    data = cur.fetchall()
+    headers = [desc[0] for desc in cur.description]
+    cur.close()
+    conn.close()
+    return headers, data
 
 class ApplicationWindow(QMainWindow):
     def __init__(self):
@@ -131,16 +130,16 @@ class ApplicationWindow(QMainWindow):
         self.mainLayout.addLayout(self.buttonLayout)
 
         # ComboBox'u butonların altına ekle
-        self.comboBox = QComboBox()
-        self.comboBox.addItems([
-            "Language level B1 and above [Ingilizce]",
-            "Language level A2 and below [Ingilizce]",
-            "Language level B1 and above [Nederlands]",
-            "Language level A2 and below [Nederlands]",
-            "At least one of English and Nederlands is at B1 level"
-        ])
-        self.comboBox.currentIndexChanged.connect(self.handleComboBoxChange)
-        self.mainLayout.addWidget(self.comboBox)
+        # self.comboBox = QComboBox()
+        # self.comboBox.addItems([
+        #     "Language level B1 and above [Ingilizce]",
+        #     "Language level A2 and below [Ingilizce]",
+        #     "Language level B1 and above [Nederlands]",
+        #     "Language level A2 and below [Nederlands]",
+        #     "At least one of English and Nederlands is at B1 level"
+        # ])
+        # self.comboBox.currentIndexChanged.connect(self.handleComboBoxChange)
+        # self.mainLayout.addWidget(self.comboBox)
 
         # QTableWidget
         self.tableWidget = QTableWidget()
@@ -170,174 +169,104 @@ class ApplicationWindow(QMainWindow):
         elif sender.text() == "EXIT":
             self.exit_application()
 
-    def handleComboBoxChange(self):
-        index = self.comboBox.currentIndex()
-        if index == 0:
-            self.find_language_level("K", ["B1", "B2 ve üzeri", "C1", "C2"])
-        elif index == 1:
-            self.find_language_level("K", ["A0", "A1", "A2"])
-        elif index == 2:
-            self.find_language_level("L", ["B1", "B2 ve üzeri", "C1", "C2"])
-        elif index == 3:
-            self.find_language_level("L", ["A0", "A1", "A2"])
-        elif index == 4:
-            self.find_combined_language_level()
+    # def handleComboBoxChange(self):
+    #     index = self.comboBox.currentIndex()
+    #     if index == 0:
+    #         self.find_language_level("english_level", ["B1", "B2 ve üzeri", "C1", "C2"])
+    #     elif index == 1:
+    #         self.find_language_level("english_level", ["A0", "A1", "A2"])
+    #     elif index == 2:
+    #         self.find_language_level("dutch_level", ["B1", "B2 ve üzeri", "C1", "C2"])
+    #     elif index == 3:
+    #         self.find_language_level("dutch_level", ["A0", "A1", "A2"])
+    #     elif index == 4:
+    #         self.find_combined_language_level()
 
-    def find_language_level(self, column_letter, levels):
-        try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
+    # def find_language_level(self, column_name, levels):
+    #     try:
+    #         query = f"SELECT * FROM applications WHERE {Yabancı dil Seviyeniz [İngilizce]} = ANY(%s)"
+    #         headers, data = fetch_data(query, (levels,))
+    #         self.load_data(headers, data)
+    #     except Exception as e:
+    #         print(f"Error finding language level {column_name}: {e}")
 
-            # Sütun harfinden indeksi bul
-            column_index = ord(column_letter) - ord('A')
-
-            filtered_data = [row for row in data if len(row) > column_index and row[column_index] in levels]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
-        except Exception as e:
-            print(f"Error finding language level {column_letter}: {e}")
-
-    def find_combined_language_level(self):
-        try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-
-            english_column_index = ord('K') - ord('A')
-            dutch_column_index = ord('L') - ord('A')
-            levels = ["B1", "B2 ve üzeri", "C1", "C2"]
-
-            filtered_data = [row for row in data if (
-                (len(row) > english_column_index and row[english_column_index] in levels) or 
-                (len(row) > dutch_column_index and row[dutch_column_index] in levels)
-            )]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
-        except Exception as e:
-            print(f"Error finding combined language levels: {e}")
+    # def find_combined_language_level(self):
+    #     try:
+    #         query = """
+    #             SELECT * FROM applications
+    #             WHERE english_level = ANY(%s) OR dutch_level = ANY(%s)
+    #         """
+    #         levels = ["B1", "B2 ve üzeri", "C1", "C2"]
+    #         headers, data = fetch_data(query, (levels, levels))
+    #         self.load_data(headers, data)
+    #     except Exception as e:
+    #         print(f"Error finding combined language levels: {e}")
 
     def load_all_applications(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            print("Data retrieved from Google Sheets:", data)  # Hata ayıklama için veriyi yazdırın
-            self.load_data(data)
+            query = "SELECT * FROM applications"
+            headers, data = fetch_data(query)
+            print("Data retrieved from PostgreSQL:", data)  # Hata ayıklama için veriyi yazdırın
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error loading data: {e}")
 
     def find_multiple_registrations(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            name_column = [row[1].strip().lower() for row in data[1:]]  # B sütunu (isimler) büyük/küçük harf duyarsız
-            name_counts = Counter(name_column)
-
-            # Birden fazla kayıt bulunan isimler
-            multiple_names = {name for name, count in name_counts.items() if count > 1}
-
-            # İlgili satırları filtrele
-            filtered_data = [row for row in data if row[1].strip().lower() in multiple_names]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
+            query = """
+                SELECT *, COUNT(*) as count
+                FROM applications
+                GROUP BY name, surname
+                HAVING COUNT(*) > 1
+            """
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding multiple registrations: {e}")
 
     def find_assigned_mentor_meetings(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            
-            # "Mentor Görüşmesi" sütunu U (21. sütun) olduğu için kontrol edin
-            filtered_data = [row for row in data if len(row) > 20 and row[20].strip().
-                        strip().upper() == "OK"]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-            
-            self.load_data(filtered_data)
+            query = "SELECT * FROM applications WHERE mentor_meeting = 'OK'"
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding assigned mentor meetings: {e}")
 
     def find_unassigned_mentor_meetings(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            
-            # "Mentor Görüşmesi" sütunu U (21. sütun) olduğu için kontrol edin
-            filtered_data = [row for row in data if len(row) > 20 and row[20].strip().upper() != "OK"]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-            
-            self.load_data(filtered_data)
+            query = "SELECT * FROM applications WHERE mentor_meeting != 'OK'"
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding unassigned mentor meetings: {e}")
 
     def find_filtered_applications(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            
-            seen_names = set()
-            filtered_data = []
-            
-            for row in data[1:]:
-                name = row[1].strip().lower()  # B sütunu (isim ve soyisim) büyük/küçük harf duyarsız
-                if name not in seen_names:
-                    seen_names.add(name)
-                    filtered_data.append(row)
-            
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-            
-            self.load_data(filtered_data)
+            query = """
+                SELECT DISTINCT ON (name, surname) *
+                FROM applications
+            """
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding filtered applications: {e}")
 
-    def load_data(self, data):
+    def load_data(self, headers, data):
         if not data:
             print("No data found.")
             return
 
-        headers = data[0]  # İlk satır başlıkları içerir
-        rows = len(data)
-        cols = len(headers)
-
-        self.tableWidget.setRowCount(rows - 1)
-        self.tableWidget.setColumnCount(cols)
+        self.tableWidget.setRowCount(len(data))
+        self.tableWidget.setColumnCount(len(headers))
 
         # Sütun başlıklarını ayarla
         self.tableWidget.setHorizontalHeaderLabels(headers)
 
         # Verileri tabloya ekle
-        for row in range(1, rows):
-            for col in range(cols):
-                item = QTableWidgetItem(data[row][col])
-                self.tableWidget.setItem(row - 1, col, item)
+        for row_idx, row_data in enumerate(data):
+            for col_idx, col_data in enumerate(row_data):
+                item = QTableWidgetItem(str(col_data))
+                self.tableWidget.setItem(row_idx, col_idx, item)
 
         self.tableWidget.resizeColumnsToContents()
         self.tableWidget.resizeRowsToContents()
@@ -348,101 +277,42 @@ class ApplicationWindow(QMainWindow):
             return
         
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-            spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'  # Kendi Spreadsheet ID'nizi ekleyin
-            range_name = 'Sayfa1!A1:V40'  # Kendi veri aralığınızı ekleyin
-            data = list_column_values(service, spreadsheet_id, range_name)
-            headers = data[0]
-            filtered_data = [row for row in data if search_text in row[1].lower()]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-            self.load_data(filtered_data)
+            query = """
+                SELECT * FROM applications
+                WHERE LOWER(Adiniz_soyadiniz) LIKE %s OR LOWER(Adiniz_Soyadiniz) LIKE %s
+            """
+            headers, data = fetch_data(query, ('%' + search_text + '%', '%' + search_text + '%'))
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error searching data: {e}")
 
     def former_vit_check(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-
-            # VIT1 dosyasından verileri çek
-            vit1_spreadsheet_id = '1JKrqbqj6kmwE7jVgSScQbIVXu3QeEnDYZZ6cxl8nXbA'
-            vit1_range_name = 'Sayfa1!A1:V40'
-            vit1_data = list_column_values(service, vit1_spreadsheet_id, vit1_range_name)
-            vit1_names = {row[1].strip().lower() for row in vit1_data[1:]}
-
-            # VIT2 dosyasından verileri çek
-            vit2_spreadsheet_id = '1NHQPJGHnyIwX1GCXE8nWDeVL5_GTEMJbRnaA2Vemmr0'
-            vit2_range_name = 'Sayfa1!A1:V40'
-            vit2_data = list_column_values(service, vit2_spreadsheet_id, vit2_range_name)
-            vit2_names = {row[1].strip().lower() for row in vit2_data[1:]}
-
-            # Başvurular dosyasından verileri çek
-            basvurular_spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'
-            basvurular_range_name = 'Sayfa1!A1:V40'
-            basvurular_data = list_column_values(service, basvurular_spreadsheet_id, basvurular_range_name)
-            headers = basvurular_data[0]
-
-            # İsimlerin en az iki dosyada bulunduğunu kontrol et
-            all_names = defaultdict(int)
-            for name in vit1_names:
-                all_names[name] += 1
-            for name in vit2_names:
-                all_names[name] += 1
-            for row in basvurular_data[1:]:
-                name = row[1].strip().lower()
-                all_names[name] += 1
-
-            # En az iki dosyada bulunan isimleri filtrele
-            common_names = {name for name, count in all_names.items() if count > 1}
-
-            # İlgili satırları filtrele ve aynı kişiyi sadece bir kez ekle
-            added_names = set()
-            filtered_data = []
-            for row in basvurular_data[1:]:
-                name = row[1].strip().lower()
-                if name in common_names and name not in added_names:
-                    filtered_data.append(row)
-                    added_names.add(name)
-
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
+            query = """
+                SELECT * FROM applications a
+                WHERE EXISTS (
+                    SELECT 1 FROM vit1 v1 WHERE v1.name = a.name AND v1.surname = a.surname
+                ) OR EXISTS (
+                    SELECT 1 FROM vit2 v2 WHERE v2.name = a.name AND v2.surname = a.surname
+                )
+            """
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding former VIT check: {e}")
 
     def find_different_registrations(self):
         try:
-            creds = authenticate()
-            service = build('sheets', 'v4', credentials=creds)
-
-            # VIT1 dosyasından verileri çek
-            vit1_spreadsheet_id = '1JKrqbqj6kmwE7jVgSScQbIVXu3QeEnDYZZ6cxl8nXbA'
-            vit1_range_name = 'Sayfa1!A1:V40'
-            vit1_data = list_column_values(service, vit1_spreadsheet_id, vit1_range_name)
-            vit1_names = {row[1].strip().lower() for row in vit1_data[1:]}
-
-            # VIT2 dosyasından verileri çek
-            vit2_spreadsheet_id = '1NHQPJGHnyIwX1GCXE8nWDeVL5_GTEMJbRnaA2Vemmr0'
-            vit2_range_name = 'Sayfa1!A1:V40'
-            vit2_data = list_column_values(service, vit2_spreadsheet_id, vit2_range_name)
-            vit2_names = {row[1].strip().lower() for row in vit2_data[1:]}
-
-            # Başvurular dosyasından verileri çek
-            basvurular_spreadsheet_id = '1Ls6wq8vi_fKfVIqYiTpx3RrC4KZvPlT60D63sXboNbM'
-            basvurular_range_name = 'Sayfa1!A1:V40'
-            basvurular_data = list_column_values(service, basvurular_spreadsheet_id, basvurular_range_name)
-            headers = basvurular_data[0]
-
-            # VIT1 ve VIT2 dosyalarında olmayan isimleri bul
-            vit1_vit2_names = vit1_names.union(vit2_names)
-            different_names = {row[1].strip().lower() for row in basvurular_data[1:] if row[1].strip().lower() not in vit1_vit2_names}
-
-            # İlgili satırları filtrele ve aynı kişiyi sadece bir kez ekle
-            filtered_data = [row for row in basvurular_data[1:] if row[1].strip().lower() in different_names]
-            filtered_data.insert(0, headers)  # Başlıkları tekrar ekle
-
-            self.load_data(filtered_data)
+            query = """
+                SELECT * FROM applications a
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM vit1 v1 WHERE v1.name = a.name AND v1.surname = a.surname
+                ) AND NOT EXISTS (
+                    SELECT 1 FROM vit2 v2 WHERE v2.name = a.name AND v2.surname = a.surname
+                )
+            """
+            headers, data = fetch_data(query)
+            self.load_data(headers, data)
         except Exception as e:
             print(f"Error finding different registrations: {e}")
 
